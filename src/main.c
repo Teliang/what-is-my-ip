@@ -2,6 +2,7 @@
 // programming
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <omp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -23,16 +24,16 @@ void build_lenght_line(char *content_length, char *content) {
   content_length[0] = '\0';
   char content_length_value[3] = {'\n'};
   sprintf(content_length_value, "%d", (int)strlen(content));
-  //
   char *content_length_key = "Content-Length: ";
   strcat(content_length, content_length_key);
   strcat(content_length, content_length_value);
   strcat(content_length, "\r\n\r\n");
 }
 
-void handling(int socket) {
+void write_socket(int socket) {
   char *response_ok = "HTTP/1.1 200 OK\r\n";
   char *response_content_type = "Content-Type: text/plain\r\n";
+  char *response_close = "Connection: close\r\n";
 
   char client_ip[20];
   get_ip_str(client_ip, socket);
@@ -42,9 +43,20 @@ void handling(int socket) {
 
   send(socket, response_ok, strlen(response_ok), 0);
   send(socket, response_content_type, strlen(response_content_type), 0);
+  send(socket, response_close, strlen(response_close), 0);
   send(socket, content_length, strlen(content_length), 0);
   send(socket, client_ip, strlen(client_ip), 0);
+}
 
+void read_socket(int socket) {
+  char buffer[1024] = {0};
+  ssize_t valread = read(socket, buffer, 1024 - 1);
+  printf("request content: \n%s\n", buffer);
+}
+
+void handling(int socket) {
+  write_socket(socket);
+  read_socket(socket);
   // closing the connected socket
   close(socket);
 }
@@ -82,9 +94,26 @@ int main(int argc, char const *argv[]) {
     perror("listen");
     exit(EXIT_FAILURE);
   }
-  while ((new_socket =
-              accept(server_fd, (struct sockaddr *)&address, &addrlen)) >= 0) {
-    handling(new_socket);
+  // OpenMP parallel region
+#pragma omp parallel
+  {
+#pragma omp single nowait
+    {
+      while (1) {
+        // Accept a new client
+        new_socket = accept(server_fd, (struct sockaddr *)&address, &addrlen);
+        if (new_socket < 0) {
+          perror("Accept failed");
+          continue;
+        }
+
+// Handle client in a new OpenMP task
+#pragma omp task firstprivate(new_socket)
+        {
+          handling(new_socket);
+        }
+      }
+    }
   }
   // closing the listening socket
   close(server_fd);
