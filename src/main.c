@@ -10,7 +10,7 @@
 #include <unistd.h>
 #define PORT 8080
 
-void get_ip_str(char *client_ip, int socket) {
+void get_client_ip_str(char *client_ip, int socket) {
   struct sockaddr_in addr;
   socklen_t addr_size = sizeof(struct sockaddr_in);
   int res = getpeername(socket, (struct sockaddr *)&addr, &addr_size);
@@ -36,15 +36,18 @@ void write_socket(int socket) {
   char *response_close = "Connection: close\r\n";
 
   char client_ip[20];
-  get_ip_str(client_ip, socket);
+  get_client_ip_str(client_ip, socket);
 
-  char content_length[20];
-  build_lenght_line(content_length, client_ip);
+  char response_content_length[20];
+  build_lenght_line(response_content_length, client_ip);
 
+  // http header
   send(socket, response_ok, strlen(response_ok), 0);
   send(socket, response_content_type, strlen(response_content_type), 0);
   send(socket, response_close, strlen(response_close), 0);
-  send(socket, content_length, strlen(content_length), 0);
+  send(socket, response_content_length, strlen(response_content_length), 0);
+
+  // http body
   send(socket, client_ip, strlen(client_ip), 0);
 }
 
@@ -63,11 +66,9 @@ void handling(int socket) {
 
 int main(int argc, char const *argv[]) {
   int server_fd, new_socket;
-  ssize_t valread;
   struct sockaddr_in address;
   int opt = 1;
   socklen_t addrlen = sizeof(address);
-  char buffer[1024] = {0};
 
   // Creating socket file descriptor
   if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
