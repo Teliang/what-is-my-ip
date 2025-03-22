@@ -1,4 +1,4 @@
-.DEFAULT_GOAL := compile
+.DEFAULT_GOAL :=gcc
 
-compile: src/main.c
-	gcc src/main.c -o what-is-my-ip
+gcc: src/main.c
+	gcc src/main.c  -o what-is-my-ip

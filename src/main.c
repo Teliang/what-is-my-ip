@@ -96,27 +96,17 @@ int main(int argc, char const *argv[]) {
     perror("listen");
     exit(EXIT_FAILURE);
   }
-  // OpenMP parallel region
-#pragma omp parallel
-  {
-#pragma omp single nowait
-    {
-      while (1) {
-        // Accept a new client
-        new_socket = accept(server_fd, (struct sockaddr *)&address, &addrlen);
-        if (new_socket < 0) {
-          perror("Accept failed");
-          continue;
-        }
 
-// Handle client in a new OpenMP task
-#pragma omp task firstprivate(new_socket)
-        {
-          handling(new_socket);
-        }
-      }
+  while (1) {
+    // Accept a new client
+    new_socket = accept(server_fd, (struct sockaddr *)&address, &addrlen);
+    if (new_socket < 0) {
+      perror("Accept failed");
+      continue;
     }
+    handling(new_socket);
   }
+
   // closing the listening socket
   close(server_fd);
   return 0;
