@@ -9,6 +9,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #define PORT 8080
+#define LISTENQ 200
 
 void get_client_ip_str(char *client_ip, int socket) {
   struct sockaddr_in addr;
@@ -91,7 +92,7 @@ int main(int argc, char const *argv[]) {
     perror("bind failed");
     exit(EXIT_FAILURE);
   }
-  if (listen(server_fd, 3) < 0) {
+  if (listen(server_fd, LISTENQ) < 0) {
     perror("listen");
     exit(EXIT_FAILURE);
   }
