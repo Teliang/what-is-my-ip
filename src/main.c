@@ -58,8 +58,11 @@ void write_socket(int socket) {
 
 void read_socket(int socket) {
   char buffer[READ_MAX_SIZE];
-  ssize_t valread = read(socket, buffer, READ_MAX_SIZE - 1);
-  printf("request content: \n%s\n", buffer);
+  ssize_t valread;
+  while ((valread = read(socket, buffer, READ_MAX_SIZE - 1)) > 0) {
+    buffer[valread] = 0x00;
+    printf("request content: \n%s\n", buffer);
+  }
 }
 
 void setnonblocking(int sock) {
