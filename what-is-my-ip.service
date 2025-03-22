@@ -1,0 +1,9 @@
+[Unit]
+Description=what is my IP
+After=network.target
+[Service]
+ExecStart=/usr/local/bin/what-is-my-ip
+Restart=on-failure
+RestartSec=50
+[Install]
+WantedBy=multi-user.target
