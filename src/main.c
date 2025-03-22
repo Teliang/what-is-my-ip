@@ -1,4 +1,3 @@
-
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -11,9 +10,9 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-#define MAXLINE 1024
-#define MAX_EVENT 500
-#define LISTENQ 100
+#define READ_MAX_SIZE 1024
+#define MAX_EVENT 5000
+#define LISTENQ 1000
 #define SERV_PORT 8080
 
 void get_client_ip_str(char *client_ip, int socket) {
@@ -57,29 +56,10 @@ void write_socket(int socket) {
   send(socket, client_ip, strlen(client_ip), 0);
 }
 
-void handle_out_event(int epfd, struct epoll_event *event) {
-  int sockfd = event->data.fd;
-  write_socket(sockfd);
-
-  /* epoll_ctl(epfd, EPOLL_CTL_DEL, sockfd, NULL); */
-  /* close(sockfd); */
-}
-
-void handle_in_event(int epfd, struct epoll_event *event) {
-  int sockfd = event->data.fd;
-
-  char buffer[MAXLINE] = {0};
-
-  int n;
-  if ((n = read(sockfd, buffer, MAXLINE)) > 0) {
-    printf("request content: \n%s\n", buffer);
-    struct epoll_event ev;
-    ev.data.fd = sockfd;
-    ev.events = EPOLLOUT | EPOLLET | EPOLLRDHUP | EPOLLHUP;
-    epoll_ctl(epfd, EPOLL_CTL_MOD, sockfd, &ev);
-  } else {
-    close(sockfd);
-  }
+void read_socket(int socket) {
+  char buffer[READ_MAX_SIZE];
+  ssize_t valread = read(socket, buffer, READ_MAX_SIZE - 1);
+  printf("request content: \n%s\n", buffer);
 }
 
 void setnonblocking(int sock) {
@@ -109,21 +89,28 @@ void handle_listen(int epfd, int listenfd) {
     return;
   }
 
-  setnonblocking(connfd);
-
   char *str = inet_ntoa(clientaddr.sin_addr);
   printf("connect from %s\n", str);
   struct epoll_event ev;
   ev.data.fd = connfd;
-  ev.events = EPOLLIN | EPOLLRDHUP | EPOLLHUP;
+  ev.events = EPOLLIN;
   if (epoll_ctl(epfd, EPOLL_CTL_ADD, connfd, &ev) == -1) {
     perror("epoll_ctl: conn_sock");
     close(connfd);
   }
 }
 
+void handling(int socket) {
+  write_socket(socket);
+  read_socket(socket);
+  // closing the connected socket
+  close(socket);
+}
+
 int main(int argc, char *argv[]) {
+  // ignore write error
   signal(SIGPIPE, SIG_IGN);
+
   printf("epoll socket begins.\n");
   int listenfd, connfd, sockfd, epfd, nfds;
 
@@ -134,6 +121,7 @@ int main(int argc, char *argv[]) {
     perror("epoll_create1");
     exit(EXIT_FAILURE);
   }
+
   printf("epoll file: %d.\n", epfd);
   // Creating socket file descriptor
   if ((listenfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
@@ -141,13 +129,13 @@ int main(int argc, char *argv[]) {
     goto close_epollfd;
   }
 
-  int opt;
+  int opt = 1;
   // Forcefully attaching socket to the port 8080
-  /* if (setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, */
-  /*                sizeof(opt))) { */
-  /*   perror("setsockopt"); */
-  /*   goto close_listenfd; */
-  /* } */
+  if (setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt,
+                 sizeof(opt))) {
+    perror("setsockopt");
+    goto close_listenfd;
+  }
 
   setnonblocking(listenfd);
 
@@ -172,35 +160,24 @@ int main(int argc, char *argv[]) {
     goto close_listenfd;
   }
 
-  int count_listen, count_in, count_out, count_close;
-  count_listen = count_in = count_out = count_close = 0;
+  int count_listen, count_handle_client;
+  count_listen = count_handle_client = 0;
   for (;;) {
     nfds = epoll_wait(epfd, events, MAX_EVENT, -1);
     printf("epoll wait return value: %d.\n", nfds);
 
     for (int i = 0; i < nfds; ++i) {
       printf("handle file is: %d\n", events[i].data.fd);
-      if (events[i].events & (EPOLLRDHUP | EPOLLHUP)) {
-        /* check if the connection is closing */
-        printf("fd:%d is closed\n", events[i].data.fd);
-        epoll_ctl(epfd, EPOLL_CTL_DEL, events[i].data.fd, NULL);
-        close(events[i].data.fd);
-        count_close++;
-      } else if (events[i].data.fd == listenfd) {
+      if (events[i].data.fd == listenfd) {
         handle_listen(epfd, listenfd);
         count_listen++;
-      } else if (events[i].events & EPOLLIN) {
-        handle_in_event(epfd, events + i);
-        count_in++;
-      } else if (events[i].events & EPOLLOUT) {
-        handle_out_event(epfd, events + i);
-        count_out++;
+      } else {
+        handling(events[i].data.fd);
+        count_handle_client++;
       }
+      printf("epoll status: count_listen: %d, count_handle_client: %d\n",
+             count_listen, count_handle_client);
     }
-
-    printf("epoll status: count_listen: %d, count_in: %d, count_out: %d, "
-           "count_close: %d\n",
-           count_listen, count_in, count_out, count_close);
   }
 close_listenfd:
   close(listenfd);
