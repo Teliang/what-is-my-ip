@@ -1,15 +1,20 @@
-// Server side C program to demonstrate Socket
-// programming
+
 #include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <netinet/in.h>
-#include <omp.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/epoll.h>
 #include <sys/socket.h>
 #include <unistd.h>
-#define PORT 8080
-#define LISTENQ 200
+
+#define MAXLINE 1024
+#define MAX_EVENT 500
+#define LISTENQ 100
+#define SERV_PORT 8080
 
 void get_client_ip_str(char *client_ip, int socket) {
   struct sockaddr_in addr;
@@ -52,62 +57,153 @@ void write_socket(int socket) {
   send(socket, client_ip, strlen(client_ip), 0);
 }
 
-void read_socket(int socket) {
-  char buffer[1024] = {0};
-  ssize_t valread = read(socket, buffer, 1024 - 1);
-  printf("request content: \n%s\n", buffer);
+void handle_out_event(int epfd, struct epoll_event *event) {
+  int sockfd = event->data.fd;
+  write_socket(sockfd);
+
+  /* epoll_ctl(epfd, EPOLL_CTL_DEL, sockfd, NULL); */
+  /* close(sockfd); */
 }
 
-void handling(int socket) {
-  write_socket(socket);
-  read_socket(socket);
-  // closing the connected socket
-  close(socket);
+void handle_in_event(int epfd, struct epoll_event *event) {
+  int sockfd = event->data.fd;
+
+  char buffer[MAXLINE] = {0};
+
+  int n;
+  if ((n = read(sockfd, buffer, MAXLINE)) > 0) {
+    printf("request content: \n%s\n", buffer);
+    struct epoll_event ev;
+    ev.data.fd = sockfd;
+    ev.events = EPOLLOUT | EPOLLET | EPOLLRDHUP | EPOLLHUP;
+    epoll_ctl(epfd, EPOLL_CTL_MOD, sockfd, &ev);
+  } else {
+    close(sockfd);
+  }
 }
 
-int main(int argc, char const *argv[]) {
-  int server_fd, new_socket;
-  struct sockaddr_in address;
-  int opt = 1;
-  socklen_t addrlen = sizeof(address);
+void setnonblocking(int sock) {
+  int opts;
+  opts = fcntl(sock, F_GETFL);
 
+  if (opts < 0) {
+    perror("fcntl(sock, GETFL)");
+    exit(1);
+  }
+
+  opts = opts | O_NONBLOCK;
+
+  if (fcntl(sock, F_SETFL, opts) < 0) {
+    perror("fcntl(sock, SETFL, opts)");
+    exit(1);
+  }
+}
+
+void handle_listen(int epfd, int listenfd) {
+  struct sockaddr_in clientaddr;
+  socklen_t clilen = sizeof(struct sockaddr_in);
+  printf("accept connection, fd is %d\n", listenfd);
+  int connfd = accept(listenfd, (struct sockaddr *)&clientaddr, &clilen);
+  if (connfd < 0) {
+    perror("connfd < 0");
+    return;
+  }
+
+  setnonblocking(connfd);
+
+  char *str = inet_ntoa(clientaddr.sin_addr);
+  printf("connect from %s\n", str);
+  struct epoll_event ev;
+  ev.data.fd = connfd;
+  ev.events = EPOLLIN | EPOLLRDHUP | EPOLLHUP;
+  if (epoll_ctl(epfd, EPOLL_CTL_ADD, connfd, &ev) == -1) {
+    perror("epoll_ctl: conn_sock");
+    close(connfd);
+  }
+}
+
+int main(int argc, char *argv[]) {
+  signal(SIGPIPE, SIG_IGN);
+  printf("epoll socket begins.\n");
+  int listenfd, connfd, sockfd, epfd, nfds;
+
+  struct epoll_event ev, events[MAX_EVENT];
+
+  epfd = epoll_create1(0);
+  if (epfd == -1) {
+    perror("epoll_create1");
+    exit(EXIT_FAILURE);
+  }
+  printf("epoll file: %d.\n", epfd);
   // Creating socket file descriptor
-  if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+  if ((listenfd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
     perror("socket failed");
-    exit(EXIT_FAILURE);
+    goto close_epollfd;
   }
 
+  int opt;
   // Forcefully attaching socket to the port 8080
-  if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt,
-                 sizeof(opt))) {
-    perror("setsockopt");
-    exit(EXIT_FAILURE);
-  }
-  address.sin_family = AF_INET;
-  address.sin_addr.s_addr = INADDR_ANY;
-  address.sin_port = htons(PORT);
+  /* if (setsockopt(listenfd, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, */
+  /*                sizeof(opt))) { */
+  /*   perror("setsockopt"); */
+  /*   goto close_listenfd; */
+  /* } */
+
+  setnonblocking(listenfd);
+
+  ev.data.fd = listenfd;
+  ev.events = EPOLLIN;
+  epoll_ctl(epfd, EPOLL_CTL_ADD, listenfd, &ev);
+
+  struct sockaddr_in serveraddr;
+  bzero(&serveraddr, sizeof(serveraddr));
+  serveraddr.sin_family = AF_INET;
+  serveraddr.sin_addr.s_addr = INADDR_ANY;
+  serveraddr.sin_port = htons(SERV_PORT);
 
   // Forcefully attaching socket to the port 8080
-  if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
+  if (bind(listenfd, (struct sockaddr *)&serveraddr, sizeof(serveraddr))) {
     perror("bind failed");
-    exit(EXIT_FAILURE);
+    goto close_listenfd;
   }
-  if (listen(server_fd, LISTENQ) < 0) {
+
+  if (listen(listenfd, LISTENQ) < 0) {
     perror("listen");
-    exit(EXIT_FAILURE);
+    goto close_listenfd;
   }
 
-  while (1) {
-    // Accept a new client
-    new_socket = accept(server_fd, (struct sockaddr *)&address, &addrlen);
-    if (new_socket < 0) {
-      perror("Accept failed");
-      continue;
+  int count_listen, count_in, count_out, count_close;
+  count_listen = count_in = count_out = count_close = 0;
+  for (;;) {
+    nfds = epoll_wait(epfd, events, MAX_EVENT, -1);
+    printf("epoll wait return value: %d.\n", nfds);
+
+    for (int i = 0; i < nfds; ++i) {
+      printf("handle file is: %d\n", events[i].data.fd);
+      if (events[i].events & (EPOLLRDHUP | EPOLLHUP)) {
+        /* check if the connection is closing */
+        printf("fd:%d is closed\n", events[i].data.fd);
+        epoll_ctl(epfd, EPOLL_CTL_DEL, events[i].data.fd, NULL);
+        close(events[i].data.fd);
+        count_close++;
+      } else if (events[i].data.fd == listenfd) {
+        handle_listen(epfd, listenfd);
+        count_listen++;
+      } else if (events[i].events & EPOLLIN) {
+        handle_in_event(epfd, events + i);
+        count_in++;
+      } else if (events[i].events & EPOLLOUT) {
+        handle_out_event(epfd, events + i);
+        count_out++;
+      }
     }
-    handling(new_socket);
-  }
 
-  // closing the listening socket
-  close(server_fd);
-  return 0;
+    printf("epoll status: count_listen: %d, count_in: %d, count_out: %d, "
+           "count_close: %d\n",
+           count_listen, count_in, count_out, count_close);
+  }
+close_listenfd:
+  close(listenfd);
+close_epollfd:
+  close(epfd);
 }
