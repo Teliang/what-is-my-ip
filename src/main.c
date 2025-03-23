@@ -59,9 +59,11 @@ void write_socket(int socket) {
 void read_socket(int socket) {
   char buffer[READ_MAX_SIZE];
   ssize_t valread;
-  while ((valread = read(socket, buffer, READ_MAX_SIZE - 1)) > 0) {
+  if ((valread = recv(socket, buffer, READ_MAX_SIZE - 1, 0)) > 0) {
     buffer[valread] = 0x00;
     printf("request content: \n%s\n", buffer);
+  } else {
+    printf("failed to read socket\n");
   }
 }
 
@@ -111,9 +113,6 @@ void handling(int socket) {
 }
 
 int main(int argc, char *argv[]) {
-  // ignore write error
-  signal(SIGPIPE, SIG_IGN);
-
   printf("epoll socket begins.\n");
   int listenfd, connfd, sockfd, epfd, nfds;
 
@@ -152,7 +151,6 @@ int main(int argc, char *argv[]) {
   serveraddr.sin_addr.s_addr = INADDR_ANY;
   serveraddr.sin_port = htons(SERV_PORT);
 
-  // Forcefully attaching socket to the port 8080
   if (bind(listenfd, (struct sockaddr *)&serveraddr, sizeof(serveraddr))) {
     perror("bind failed");
     goto close_listenfd;
@@ -165,7 +163,7 @@ int main(int argc, char *argv[]) {
 
   int count_listen, count_handle_client;
   count_listen = count_handle_client = 0;
-  for (;;) {
+  while (1) {
     nfds = epoll_wait(epfd, events, MAX_EVENT, -1);
     printf("epoll wait return value: %d.\n", nfds);
 
